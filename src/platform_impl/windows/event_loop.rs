@@ -919,19 +919,6 @@ unsafe extern "system" fn public_window_callback<T: 'static>(
   result
 }
 
-fn is_show_window_contents_while_dragging_enabled() -> bool {
-  let mut is_enabled: BOOL = BOOL(0);
-  let result = unsafe {
-    SystemParametersInfoW(
-      SPI_GETDRAGFULLWINDOWS,
-      0,
-      &mut is_enabled as *mut _ as *mut std::ffi::c_void,
-      SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-    )
-  };
-  result.0 != 0 && is_enabled.0 != 0
-}
-
 unsafe fn public_window_callback_inner<T: 'static>(
   window: HWND,
   msg: u32,
@@ -1890,18 +1877,6 @@ unsafe fn public_window_callback_inner<T: 'static>(
         (old_physical_inner_rect.bottom - old_physical_inner_rect.top) as u32,
       );
 
-      if !is_show_window_contents_while_dragging_enabled() {
-        subclass_input.send_event(Event::WindowEvent {
-          window_id: RootWindowId(WindowId(window.0)),
-          event: ScaleFactorChanged {
-            scale_factor: new_scale_factor,
-            new_inner_size: &mut old_physical_inner_size,
-          },
-        });
-        result = ProcResult::Value(LRESULT(0));
-        return ;
-      }
-
       // `allow_resize` prevents us from re-applying DPI adjustment to the restored size after
       // exiting fullscreen (the restored size is already DPI adjusted).
       let mut new_physical_inner_size = match allow_resize {
@@ -1913,14 +1888,6 @@ unsafe fn public_window_callback_inner<T: 'static>(
         false => old_physical_inner_size,
       };
 
-      let _ = subclass_input.send_event(Event::WindowEvent {
-        window_id: RootWindowId(WindowId(window.0)),
-        event: ScaleFactorChanged {
-          scale_factor: new_scale_factor,
-          new_inner_size: &mut new_physical_inner_size,
-        },
-      });
-
       let dragging_window: bool;
 
       {
@@ -1928,6 +1895,20 @@ unsafe fn public_window_callback_inner<T: 'static>(
         dragging_window = window_state
           .window_flags()
           .contains(WindowFlags::MARKER_IN_SIZE_MOVE);
+
+        // When the "Show window contents while dragging" is turned off, there is no need to adjust the window size.
+        if !is_show_window_contents_while_dragging_enabled() && dragging_window {
+          new_physical_inner_size = old_physical_inner_size;
+        }
+
+        let _ = subclass_input.send_event(Event::WindowEvent {
+          window_id: RootWindowId(WindowId(window.0)),
+          event: ScaleFactorChanged {
+            scale_factor: new_scale_factor,
+            new_inner_size: &mut new_physical_inner_size,
+          },
+        });
+
         // Unset maximized if we're changing the window's size.
         if new_physical_inner_size != old_physical_inner_size {
           WindowState::set_window_flags(window_state, window, |f| {
@@ -2169,6 +2150,19 @@ unsafe fn public_window_callback_inner<T: 'static>(
     ProcResult::DefWindowProc => DefWindowProcW(window, msg, wparam, lparam),
     ProcResult::Value(val) => val,
   }
+}
+
+fn is_show_window_contents_while_dragging_enabled() -> bool {
+  let mut is_enabled: BOOL = BOOL(0);
+  let result = unsafe {
+    SystemParametersInfoW(
+      SPI_GETDRAGFULLWINDOWS,
+      0,
+      &mut is_enabled as *mut _ as *mut std::ffi::c_void,
+      SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+    )
+  };
+  result.0 != 0 && is_enabled.0 != 0
 }
 
 unsafe extern "system" fn thread_event_target_callback<T: 'static>(
